@@ -1,109 +1,189 @@
-`timescale 1ns / 1ps
-//////////////////////////////////////////////////////////////////////////////////
-// Company: 
-// Engineer: 
-// 
-// Create Date: 12/09/2023 03:31:50 PM
-// Design Name: 
-// Module Name: vga_driver
-// Project Name: 
-// Target Devices: 
-// Tool Versions: 
-// Description: 
-// 
-// Dependencies: 
-// 
-// Revision:
-// Revision 0.01 - File Created
-// Additional Comments:
-// 
-//////////////////////////////////////////////////////////////////////////////////
-
-
-module vga_driver(
-    input clk,  // Pixel clock
-    input reset,
-    input [15:0] game_state,  // Game state indicating tile states (1 bit per tile)
-    input [15:0] matched_tiles, // Indicates matched tiles
-    input [15:0] mismatched_tiles, // Indicates mismatched tiles
-    output reg hsync,
-    output reg vsync,
-    output reg [11:0] rgb  // 4 bits for Red, Green, and Blue
+// VGA driver module for displaying graphics on a VGA monitor.
+module vga_driver (
+    input in_clk,
+    input [15:0] states,  // Tile states from game_logic module
+    input [47:0] tile_vals,  // Tile values from level_select module
+    output reg [3:0] VGA_R,
+    output reg [3:0] VGA_G,
+    output reg [3:0] VGA_B,
+    output reg VGA_HS,
+    output reg VGA_VS
 );
 
-    // VGA timing parameters for 640x480 @ 60Hz
-    parameter H_SYNC_PULSE = 96;
-    parameter H_BACK_PORCH = 48;
-    parameter H_FRONT_PORCH = 16;
-    parameter H_DISPLAY = 640;
-    parameter V_SYNC_PULSE = 2;
-    parameter V_BACK_PORCH = 33;
-    parameter V_FRONT_PORCH = 10;
-    parameter V_DISPLAY = 480;
+    // Clock divider module for generating an internal clock
+    clk_divider CD(in_clk, clk);
 
-    // Counters
-    reg [9:0] h_count = 0;  // Horizontal counter
-    reg [9:0] v_count = 0;  // Vertical counter
+    // Counter and state variables for horizontal and vertical synchronization
+    reg [31:0] count, vertical_count;
+    reg [31:0] vertical_position, horizontal_position;
+    reg [1:0] vertical_state, horizontal_state;
+    reg vertical_trigger, vertical_blank; // Triggers the vertical state machine
 
-    // Sync signal generation
-    always @(posedge clk) begin
-        if (reset) begin
-            h_count <= 0;
-            v_count <= 0;
-        end else begin
-            // Horizontal counter
-            if (h_count < H_SYNC_PULSE + H_BACK_PORCH + H_DISPLAY + H_FRONT_PORCH - 1)
-                h_count <= h_count + 1;
-            else begin
-                h_count <= 0;
-                // Vertical counter
-                if (v_count < V_SYNC_PULSE + V_BACK_PORCH + V_DISPLAY + V_FRONT_PORCH - 1)
-                    v_count <= v_count + 1;
-                else
-                    v_count <= 0;
-            end
-        end
-
-        // Generate HSYNC and VSYNC signals
-        hsync <= (h_count < H_SYNC_PULSE) ? 0 : 1;
-        vsync <= (v_count < V_SYNC_PULSE) ? 0 : 1;
+    // Initial setup
+    initial begin
+        vertical_position = 0;
+        count = 1;
+        vertical_count = 1;
+        horizontal_position = 0;
+        vertical_state = 3;
+        horizontal_state = 3;
+        VGA_HS = 1;
+        VGA_VS = 1;
+        VGA_R = 0;
+        VGA_G = 0;
+        VGA_B = 0;
+        vertical_trigger = 0;
+        vertical_blank = 1;
     end
 
-    // Tile display parameters
-    parameter TILE_SIZE = 80; // Size of each tile in pixels
-    parameter GRID_OFFSET_X = 120; // Horizontal offset of the grid
-    parameter GRID_OFFSET_Y = 60;  // Vertical offset of the grid
-
-    wire [3:0] tile_row, tile_col;
-    assign tile_row = (v_count - GRID_OFFSET_Y) / TILE_SIZE;
-    assign tile_col = (h_count - GRID_OFFSET_X) / TILE_SIZE;
-    wire is_tile_area = (h_count >= GRID_OFFSET_X) && (h_count < GRID_OFFSET_X + TILE_SIZE * 4) &&
-                        (v_count >= GRID_OFFSET_Y) && (v_count < GRID_OFFSET_Y + TILE_SIZE * 4);
-    integer tile_index;
-    
-    // RGB signal generation based on game state and counters
+    // Main clocked process
     always @(posedge clk) begin
-        if (reset) begin
-            h_count <= 0;
-            v_count <= 0;
-            rgb <= 12'h000; // Default to black
-        end else begin
-            if (is_tile_area) begin
-                tile_index = tile_row * 4 + tile_col; 
-                if (game_state[tile_index]) begin
-                    // Tile is selected
-                    if (matched_tiles[tile_index]) begin
-                        rgb <= 12'h0F0; // Green for matched tiles
-                    end else if (mismatched_tiles[tile_index]) begin
-                        rgb <= 12'hF00; // Red for mismatched tiles
+        // Horizontal state machine logic
+        if (horizontal_state == 0) begin
+            // Counter for horizontal synchronization
+            if (count == 47) begin
+                count <= 1;
+                horizontal_state <= 1;
+                vertical_trigger <= 1;
+            end else begin
+                vertical_trigger <= 0;
+                count <= count + 1;
+            end
+        end
+        else if (horizontal_state == 1) begin
+            // Displaying pixel colors based on tile values and states
+            if (horizontal_position == 640) begin
+                VGA_R <= 0;
+                VGA_G <= 0;
+                VGA_B <= 0;
+                horizontal_position <= 0;
+                horizontal_state <= 2;
+            end else begin
+                // Checking tile state and setting RGB values accordingly
+                if (vertical_blank == 0) begin
+                    if (states[(horizontal_position / 160) + (vertical_position / 120) * 4]) begin
+                        case (tile_vals[(horizontal_position / 160) + (vertical_position / 120) * 4])
+                            3'd0: begin // Red
+                                VGA_R <= 8;
+                                VGA_G <= 0;
+                                VGA_B <= 0;
+                            end
+                            3'd1: begin // Green
+                                VGA_R <= 0;
+                                VGA_G <= 8;
+                                VGA_B <= 0;
+                            end
+                            3'd2: begin // Yellow
+                                VGA_R <= 8;
+                                VGA_G <= 8;
+                                VGA_B <= 0;
+                            end
+                            3'd3: begin // Orange
+                                VGA_R <= 8;
+                                VGA_G <= 4;
+                                VGA_B <= 0;
+                            end
+                            3'd4: begin // Purple
+                                VGA_R <= 8;
+                                VGA_G <= 0;
+                                VGA_B <= 8;
+                            end
+                            3'd5: begin // Blue
+                                VGA_R <= 0;
+                                VGA_G <= 0;
+                                VGA_B <= 8;
+                            end
+                            3'd6: begin // Teal
+                                VGA_R <= 0;
+                                VGA_G <= 8;
+                                VGA_B <= 8;
+                            end
+                            3'd7: begin // White
+                                VGA_R <= 8;
+                                VGA_G <= 8;
+                                VGA_B <= 8;
+                            end
+                            default: begin
+                                VGA_R <= 0;
+                                VGA_G <= 0;
+                                VGA_B <= 0;
+                            end
+                        endcase
                     end else begin
-                        rgb <= 12'hFFF; // White for selected tiles
+                        VGA_R <= 8;
+                        VGA_G <= 8;
+                        VGA_B <= 8;
                     end
                 end else begin
-                    rgb <= 12'h00F; // Default color (blue) for unselected tiles
+                    VGA_R <= 0;
+                    VGA_G <= 0;
+                    VGA_B <= 0;
                 end
+                horizontal_position <= horizontal_position + 1;
+            end
+        end
+        else if (horizontal_state == 2) begin
+            // Counter for horizontal synchronization
+            if (count == 16) begin
+                count <= 1;
+                VGA_HS <= 0;
+                horizontal_state <= 3;
             end else begin
-                rgb <= 12'h000; // Black for non-tile areas
+                count <= count + 1;
+            end
+        end
+        else begin // horizontal_state == 3
+            // Counter for horizontal synchronization
+            if (count == 96) begin
+                VGA_HS <= 1;
+                count <= 1;
+                horizontal_state <= 0;
+            end else begin
+                count <= count + 1;
+            end
+        end
+    end
+
+    // Vertical synchronization process
+    always @(posedge vertical_trigger) begin
+        if (vertical_state == 0) begin
+            // Counter for vertical synchronization
+            if (vertical_count == 32) begin
+                vertical_count <= 1;
+                vertical_state <= 1;
+            end else begin
+                vertical_count <= vertical_count + 1;
+            end
+        end
+        else if (vertical_state == 1) begin
+            // Display vertical position and check for vertical blank
+            if (vertical_position == 480) begin
+                vertical_position <= 0;
+                vertical_state <= 2;
+                vertical_blank <= 1;
+            end else begin
+                vertical_blank <= 0;
+                vertical_position <= vertical_position + 1;
+            end
+        end
+        else if (vertical_state == 2) begin
+            // Counter for vertical synchronization
+            if (vertical_count == 10) begin
+                vertical_count <= 1;
+                VGA_VS <= 0;
+                vertical_state <= 3;
+            end else begin
+                vertical_count <= vertical_count + 1;
+            end
+        end
+        else begin // vertical_state == 3
+            // Counter for vertical synchronization
+            if (vertical_count == 2) begin
+                VGA_VS <= 1;
+                vertical_count <= 1;
+                vertical_state <= 0;
+            end else begin
+                vertical_count <= vertical_count + 1;
             end
         end
     end
