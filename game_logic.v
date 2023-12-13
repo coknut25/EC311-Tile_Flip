@@ -1,100 +1,73 @@
 `timescale 1ns / 1ps
-//////////////////////////////////////////////////////////////////////////////////
-// Company: 
-// Engineer: 
-// 
-// Create Date: 12/07/2023 07:16:53 PM
-// Design Name: 
-// Module Name: game_logic
-// Project Name: 
-// Target Devices: 
-// Tool Versions: 
-// Description: 
-// 
-// Dependencies: 
-// 
-// Revision:
-// Revision 0.01 - File Created
-// Additional Comments:
-// 
-//////////////////////////////////////////////////////////////////////////////////
 
-
+// This Verilog module represents the logic for a memory match game.
 module game_logic(
-    input clk,
-    input reset,
-    input [15:0] switches,
-    output reg [15:0] tile_states,
-    output reg [47:0] tile_values_flat, // Flattened 48-bit wide signal for tile values
-    output reg game_reset,
-    output reg [3:0] tries
+    input clk,          // System clock input
+    input reset,        // System reset input
+    input [15:0] switches,  // Input for switches representing game state
+    output reg [15:0] leds,  // Output LEDs indicating game state
+    output reg [47:0] tiles  // Output representing the memory match tiles
 );
 
-    reg [3:0] first_selected = 0, second_selected = 0;
-    reg [15:0] previous_state;
-    reg selecting_second = 0;
-    reg [15:0] matched_tiles;  // Register to track matched tiles
-    reg [15:0] mismatched_tiles; // Register to track mismatched tiles
-    reg [3:0] mismatch_counter = 0; // Counter for time after mismatch
-    integer i;
+    // Registers for storing game state
+    reg [3:0] first = 4'b1111, second = 4'b1111;
+    reg [15:0] match;
+    reg [15:0] mismatch;
+    reg select2 = 0; 
+    reg [1:0] state [15:0];  // State register for each switch
+    integer i; 
 
-    always @(posedge clk) begin
-        if (reset || tries >= 10) begin
-            // Reset the game state
-            tries <= 0;
-            game_reset <= 1;
-            tile_states <= 0;
-            selecting_second <= 0;
-            matched_tiles <= 0;  // Reset matched tiles
-            mismatched_tiles <= 0; // Reset mismatched tiles
-            mismatch_counter <= 0; // Reset mismatch counter
-            tile_values_flat <= 0; // Reset tile values
-            // Reset other states as needed
-        end else begin
-            game_reset <= 0;
-           
-            // Detect switch changes to select tiles
+    // Clocked process triggered on the positive edge of the system clock or the reset signal
+    always @(posedge clk or posedge reset) begin
+        if (reset) begin 
+            // Resetting game state and LEDs when the reset signal is asserted
             for (i = 0; i < 16; i = i + 1) begin
-                if (switches[i] && !previous_state[i] && !matched_tiles[i] && !mismatched_tiles[i]) begin
-                    if (!selecting_second) begin
-                        first_selected <= i;
-                        selecting_second <= 1;
-                        tile_states[i] <= 1;
-                    end else begin
-                        second_selected <= i;
-                        tile_states[i] <= 1;
-                        selecting_second <= 0;
-                        tries <= tries + 1;
-
-                        // Check if tiles match
-                        if (tile_values_flat[first_selected*3 +: 3] == tile_values_flat[second_selected*3 +: 3]) begin
-                            // Handle matched tiles
-                            matched_tiles[first_selected] <= 1;
-                            matched_tiles[second_selected] <= 1;
-                        end else begin
-                            // Handle unmatched tiles
-                            mismatched_tiles[first_selected] <= 1;
-                            mismatched_tiles[second_selected] <= 1;
-                            mismatch_counter <= 0; // Start counter for 1 second
+                state[i] <= 0; 
+                leds[i] <= 0; 
+                match[i] <= 0; 
+                mismatch[i] <= 0; 
+            end
+            first <= 4'b1111;
+            second <= 4'b1111;
+            select2 <= 0; 
+        end else begin
+            for (i = 0; i < 16; i = i + 1) begin 
+                if (switches[i]) begin
+                    if (!select2 && state[i] == 0) begin 
+                        // Handling first selection of a switch
+                        first <= i;
+                        select2 <= 1;
+                        state[i] <= 1;
+                    end else if (select2 && state[i] == 0) begin 
+                        // Handling second selection of a switch
+                        second <= i; 
+                        select2 <= 0;
+                        state[i] <= 1;
+                        
+                        // Checking if selected tiles match
+                        if (tiles[first*3 +: 3] == tiles[second*3 +: 3]) begin
+                            match[first] <= 1; 
+                            match[second] <= 1; 
+                            leds[first] <= 1; 
+                            leds[second] <= 1; 
+                        end else begin 
+                            mismatch[first] <= 1;
+                            mismatch[second] <= 1;
                         end
+                        
+                        // Resetting selection registers
+                        first <= 4'b1111;
+                        second <= 4'b1111;
                     end
+                end else if (!switches[i] && state[i] == 1) begin
+                    // Resetting state if a switch is deselected
+                    state[i] <= 0; 
+                    if (i == first) first <= 4'b1111;
+                    if (i == second) second <= 4'b1111;
                 end
             end
-           
-            // Increment mismatch counter if needed
-            if (mismatch_counter < 100000000) begin
-                mismatch_counter <= mismatch_counter + 1; // Assuming 1 second is 100000000 clock cycles
-            end else begin
-                // Reset mismatched tiles after 1 second
-                mismatched_tiles <= 0;
-                mismatch_counter <= 0;
-            end
-           
-            // Update previous state
-            previous_state <= switches;
         end
     end
-
 endmodule
 
 
